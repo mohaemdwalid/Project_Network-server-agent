@@ -117,18 +117,33 @@ class AuthoritativeServer:
         "google.com": {
             "A": "142.250.190.78",
             "TXT": "Google Services",
+            "MX": "alt1.gmail-smtp-in.l.google.com",  # Realistic MX record
+            "NS": "ns1.google.com",  # Realistic NS record
         },
         "github.com": {
             "A": "140.82.121.4",
-            "MX": "mail.github.com",
             "TXT": "GitHub Repository Hosting",
+            "MX": "mail.github.com",  # Realistic MX record
+            "NS": "ns-1283.awsdns-32.org",  # Realistic NS record
         },
         "facebook.com": {
             "A": "157.240.23.35",
             "TXT": "Meta Social Network",
         },
-        "nyu.edu": {"A": "128.122.49.42", "TXT": "NYU University"},
-        "cs.umass.edu": {"A": "128.119.240.18", "TXT": "UMass CS Department"},
+        "nyu.edu": {
+            "A": "128.122.49.42",
+            "TXT": "NYU University",
+        },
+        "cs.umass.edu": {
+            "A": "128.119.240.18",
+            "TXT": "UMass CS Department",
+        },
+        "www.youtube.co": {
+            "CNAME": "youtube-ui.l.google.com",  # CNAME pointing to the actual service
+        },
+        "youtube-ui.l.google.com": {
+            "A": "216.58.198.78",  # IP address of youtube-ui.l.google.com
+        },
     }
 
     def __init__(self, host, port):
