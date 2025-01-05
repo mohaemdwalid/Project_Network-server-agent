@@ -3,6 +3,7 @@ import struct
 import logging
 import time
 from collections import defaultdict
+from threading import Thread
 
 # Logging configuration
 logging.basicConfig(
@@ -83,31 +84,53 @@ class TLDServer:
         self.port = port
         self.cache = DNSCache()
 
-    def start(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        server_socket.bind((self.host, self.port))
-        logging.info(f"TLD Server started on {self.host}:{self.port}")
+    def handle_udp(self):
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.bind((self.host, self.port))
+        logging.info(f"TLD Server UDP started on {self.host}:{self.port}")
 
         while True:
-            data, addr = server_socket.recvfrom(512)
-            domain_name = extract_domain_name(data)
-            query_type = extract_query_type(data)
-            logging.info(f"[QUERY RECEIVED] Domain: {domain_name}, Type: {query_type}")
+            data, addr = udp_socket.recvfrom(512)
+            self.handle_query(data, addr, udp_socket)
 
-            # Check Cache
-            cached_response = self.cache.get(domain_name, query_type)
-            if cached_response:
-                server_socket.sendto(cached_response, addr)
-                logging.info(f"[CACHE RESPONSE SENT] Domain: {domain_name}, Type: {query_type}")
-                continue
+    def handle_tcp(self):
+        tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp_socket.bind((self.host, self.port))
+        tcp_socket.listen(5)
+        logging.info(f"TLD Server TCP started on {self.host}:{self.port}")
 
-            # Check TLD Records
-            if domain_name in self.TLD_RECORDS:
-                auth_info = self.TLD_RECORDS[domain_name]
-                self.forward_to_authoritative(data, auth_info, query_type, addr, server_socket)
-            else:
-                logging.warning(f"[NO RECORD] Domain: {domain_name} not found in TLD records")
-                self.send_response(data, 3, addr, server_socket)  # NXDOMAIN
+        while True:
+            conn, addr = tcp_socket.accept()
+            Thread(target=self.handle_tcp_client, args=(conn,)).start()
+
+    def handle_tcp_client(self, conn):
+        try:
+            data = conn.recv(1024)
+            if data:
+                response = self.handle_query(data, conn.getpeername(), conn)
+                conn.sendall(response)
+        finally:
+            conn.close()
+
+    def handle_query(self, data, addr, socket_conn):
+        domain_name = extract_domain_name(data)
+        query_type = extract_query_type(data)
+        logging.info(f"[QUERY RECEIVED] Domain: {domain_name}, Type: {query_type}")
+
+        # Check Cache
+        cached_response = self.cache.get(domain_name, query_type)
+        if cached_response:
+            socket_conn.sendto(cached_response, addr)
+            logging.info(f"[CACHE RESPONSE SENT] Domain: {domain_name}, Type: {query_type}")
+            return
+
+        # Check TLD Records
+        if domain_name in self.TLD_RECORDS:
+            auth_info = self.TLD_RECORDS[domain_name]
+            self.forward_to_authoritative(data, auth_info, query_type, addr, socket_conn)
+        else:
+            logging.warning(f"[NO RECORD] Domain: {domain_name} not found in TLD records")
+            self.send_response(data, 3, addr, socket_conn)  # NXDOMAIN
 
     def forward_to_authoritative(self, query, auth_info, query_type, client_addr, server_socket):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as auth_socket:
@@ -125,6 +148,10 @@ class TLDServer:
     def send_response(self, query, rcode, client_addr, server_socket):
         response = query[:2] + struct.pack("!H", 0x8180 | rcode) + query[4:]
         server_socket.sendto(response, client_addr)
+
+    def start(self):
+        Thread(target=self.handle_udp).start()
+        Thread(target=self.handle_tcp).start()
 
 if __name__ == "__main__":
     tld_server = TLDServer("192.168.1.3", 8054)

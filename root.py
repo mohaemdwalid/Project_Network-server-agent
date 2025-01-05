@@ -3,6 +3,7 @@ import struct
 import logging
 import time
 from collections import defaultdict
+from threading import Thread
 
 # Logging configuration
 logging.basicConfig(
@@ -38,10 +39,19 @@ class DNSCache:
 def extract_domain_name(data):
     domain_name = ""
     i = 12
-    while data[i] != 0:
-        length = data[i]
-        domain_name += data[i + 1:i + 1 + length].decode() + "."
-        i += length + 1
+
+    try:
+        while i < len(data) and data[i] != 0:
+            length = data[i]
+            if i + length + 1 >= len(data):
+                logging.error("[MALFORMED QUERY] Invalid domain name structure")
+                return ""
+            domain_name += data[i + 1:i + 1 + length].decode() + "."
+            i += length + 1
+    except (IndexError, UnicodeDecodeError) as e:
+        logging.error(f"[MALFORMED QUERY] {e}")
+        return ""
+    
     return domain_name[:-1]
 
 def extract_query_type(data):
@@ -62,49 +72,93 @@ class RootServer:
         self.port = port
         self.cache = DNSCache()
 
-    def start(self):
-        server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        server_socket.bind((self.host, self.port))
-        logging.info(f"Root Server started on {self.host}:{self.port}")
+    def handle_udp(self):
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.bind((self.host, self.port))
+        logging.info(f"Root Server UDP started on {self.host}:{self.port}")
 
         while True:
-            data, addr = server_socket.recvfrom(512)
+            data, addr = udp_socket.recvfrom(512)
+            response = self.handle_query(data)
+            if response:
+                udp_socket.sendto(response, addr)
+
+    def handle_tcp(self):
+        tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp_socket.bind((self.host, self.port))
+        tcp_socket.listen(5)
+        logging.info(f"Root Server TCP started on {self.host}:{self.port}")
+
+        while True:
+            conn, addr = tcp_socket.accept()
+            Thread(target=self.handle_tcp_client, args=(conn,)).start()
+
+    def handle_tcp_client(self, conn):
+        try:
+            length_prefix = conn.recv(2)
+            if len(length_prefix) < 2:
+                logging.error("[TCP ERROR] Incomplete length prefix received")
+                return
+
+            query_length = struct.unpack("!H", length_prefix)[0]
+            data = conn.recv(query_length)
+            if len(data) < query_length:
+                logging.error("[TCP ERROR] Incomplete DNS query received")
+                return
+
+            response = self.handle_query(data)
+            if response:
+                length_prefix = struct.pack("!H", len(response))
+                conn.sendall(length_prefix + response)
+        finally:
+            conn.close()
+
+    def handle_query(self, data):
+        try:
             domain_name = extract_domain_name(data)
             query_type = extract_query_type(data)
             logging.info(f"[QUERY RECEIVED] Domain: {domain_name}, Type: {query_type}")
 
-            # Check Cache
             cached_response = self.cache.get(domain_name, query_type)
             if cached_response:
-                server_socket.sendto(cached_response, addr)
-                logging.info(f"[CACHE RESPONSE SENT] Domain: {domain_name}, Type: {query_type}")
-                continue
+                return cached_response
 
-            # Determine TLD
             tld = domain_name.split('.')[-1]
-
             if tld in self.ROOT_RECORDS:
                 tld_info = self.ROOT_RECORDS[tld]
-                self.forward_to_tld(data, tld_info, query_type, addr, server_socket)
+                return self.forward_to_tld(data, tld_info, query_type)
             else:
                 logging.warning(f"[INVALID TLD] No record for TLD: {tld}")
-                self.send_response(data, 3, addr, server_socket)  # NXDOMAIN
+                return self.build_error_response(data, 3)
+        except Exception as e:
+            logging.error(f"[QUERY ERROR] {e}")
+            return self.build_error_response(data, 1)
 
-    def forward_to_tld(self, query, tld_info, query_type, client_addr, server_socket):
+    def forward_to_tld(self, query, tld_info, query_type):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as tld_socket:
             tld_socket.settimeout(5)
             try:
                 tld_socket.sendto(query, (tld_info["host"], tld_info["port"]))
                 response, _ = tld_socket.recvfrom(512)
                 self.cache.set(extract_domain_name(query), query_type, response, 3600)
-                server_socket.sendto(response, client_addr)
+                return response
             except socket.timeout:
                 logging.error(f"[TLD TIMEOUT] No response from TLD Server: {tld_info['host']}:{tld_info['port']}")
-                self.send_response(query, 2, client_addr, server_socket)  # SERVFAIL
+                return self.build_error_response(query, 2)
 
-    def send_response(self, query, rcode, client_addr, server_socket):
-        response = query[:2] + struct.pack("!H", 0x8180 | rcode) + query[4:]
-        server_socket.sendto(response, client_addr)
+    def build_error_response(self, query, rcode):
+        transaction_id = query[:2]
+        flags = struct.pack("!H", 0x8180 | rcode)
+        questions = query[4:6]
+        answer_rrs = struct.pack("!H", 0)
+        authority_rrs = struct.pack("!H", 0)
+        additional_rrs = struct.pack("!H", 0)
+        question = query[12:]
+        return transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs + question
+
+    def start(self):
+        Thread(target=self.handle_udp).start()
+        Thread(target=self.handle_tcp).start()
 
 if __name__ == "__main__":
     root_server = RootServer("192.168.1.3", 53)
