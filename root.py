@@ -66,6 +66,16 @@ class RootServer:
         "io": {"host": "192.168.1.3", "port": 8054},
         "gov": {"host": "192.168.1.3", "port": 8054},
     }
+    def build_error_response(self, query, rcode):
+        transaction_id = query[:2]
+        flags = struct.pack("!H", 0x8180 | rcode)  # Set the error code in the response
+        questions = query[4:6]
+        answer_rrs = struct.pack("!H", 0)
+        authority_rrs = struct.pack("!H", 0)
+        additional_rrs = struct.pack("!H", 0)
+        question = query[12:]  # Include the original question section
+        return transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs + question
+
 
     def __init__(self, host, port):
         self.host = host
@@ -113,26 +123,44 @@ class RootServer:
         finally:
             conn.close()
 
-    def handle_query(self, data):
-        try:
-            domain_name = extract_domain_name(data)
-            query_type = extract_query_type(data)
-            logging.info(f"[QUERY RECEIVED] Domain: {domain_name}, Type: {query_type}")
+    def handle_query(self, data, addr=None, socket_conn=None, is_tcp=False):
+        # Extract domain name and query type
+        domain_name = extract_domain_name(data)
+        query_type = extract_query_type(data)
+        logging.info(f"[QUERY RECEIVED] Domain: {domain_name}, Type: {query_type}")
 
-            cached_response = self.cache.get(domain_name, query_type)
-            if cached_response:
-                return cached_response
+        # Check for malformed queries
+        if not domain_name:
+            logging.error("[FORMERR] Malformed query")
+            return self.build_error_response(data, 1)  # FORMERR
 
-            tld = domain_name.split('.')[-1]
-            if tld in self.ROOT_RECORDS:
-                tld_info = self.ROOT_RECORDS[tld]
-                return self.forward_to_tld(data, tld_info, query_type)
-            else:
-                logging.warning(f"[INVALID TLD] No record for TLD: {tld}")
-                return self.build_error_response(data, 3)
-        except Exception as e:
-            logging.error(f"[QUERY ERROR] {e}")
-            return self.build_error_response(data, 1)
+        # Check for supported query types
+        supported_query_types = [1, 2, 5, 15, 16]  # A, NS, CNAME, MX, TXT
+        if query_type not in supported_query_types:
+            logging.error("[NOTIMP] Query type not implemented")
+            return self.build_error_response(data, 4)  # NOTIMP
+
+        # Check for server policy (REFUSED example: domain is blacklisted)
+        blacklisted_domains = ["restricted.com", "blocked.com"]
+        if domain_name in blacklisted_domains:
+            logging.error("[REFUSED] Query refused due to policy")
+            return self.build_error_response(data, 5)  # REFUSED
+
+        # Check Cache
+        cached_response = self.cache.get(domain_name, query_type)
+        if cached_response:
+            logging.info("[CACHE RESPONSE SENT]")
+            return cached_response
+
+        # Determine TLD
+        tld = domain_name.split('.')[-1]
+        if tld in self.ROOT_RECORDS:
+            tld_info = self.ROOT_RECORDS[tld]
+            return self.forward_to_tld(data, tld_info, query_type)
+        else:
+            logging.warning("[NXDOMAIN] No record for TLD")
+            return self.build_error_response(data, 3)  # NXDOMAIN
+
 
     def forward_to_tld(self, query, tld_info, query_type):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as tld_socket:
