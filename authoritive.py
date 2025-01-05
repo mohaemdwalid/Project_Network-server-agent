@@ -131,6 +131,7 @@ def add_glue_records(ns_records, dns_records):
 
 class AuthoritativeServer:
     DNS_RECORDS = {
+        # Example Domain Records
         "example.com": {
             "A": "93.184.216.34",
             "CNAME": "alias.example.com",
@@ -139,13 +140,53 @@ class AuthoritativeServer:
             "NS": "ns1.example.com",
         },
         "ns1.example.com": {"A": "192.0.2.1"},  # Glue record
+        "mail.example.com": {"A": "93.184.216.35"},  # Mail server record
+        "alias.example.com": {"A": "93.184.216.34"},  # Alias points to main server
+
+        # Google Domain Records
         "google.com": {
             "A": "142.250.190.78",
             "TXT": "Google Services",
+            "MX": "alt1.gmail-smtp-in.l.google.com",
             "NS": "ns1.google.com",
         },
         "ns1.google.com": {"A": "192.0.2.2"},  # Glue record
+        "alt1.gmail-smtp-in.l.google.com": {"A": "172.217.10.27"},  # MX server
+
+        # GitHub Domain Records
+        "github.com": {
+            "A": "140.82.121.4",
+            "TXT": "GitHub Repository Hosting",
+            "MX": "mail.github.com",
+            "NS": "ns-1283.awsdns-32.org",
+        },
+        "mail.github.com": {"A": "192.30.252.1"},  # Mail server for GitHub
+
+        # Facebook Domain Records
+        "facebook.com": {
+            "A": "157.240.23.35",
+            "TXT": "Meta Social Network",
+        },
+
+        # Educational Institutions
+        "nyu.edu": {
+            "A": "128.122.49.42",
+            "TXT": "NYU University",
+        },
+        "cs.umass.edu": {
+            "A": "128.119.240.18",
+            "TXT": "UMass CS Department",
+        },
+
+        # YouTube with CNAME Example
+        "www.youtube.co": {
+            "CNAME": "youtube-ui.l.google.com",
+        },
+        "youtube-ui.l.google.com": {
+            "A": "216.58.198.78",
+        },
     }
+
 
     def __init__(self, host, port):
         self.host = host
