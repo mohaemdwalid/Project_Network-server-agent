@@ -48,6 +48,11 @@ def extract_domain_name(data):
 def extract_query_type(data):
     return struct.unpack("!H", data[-4:-2])[0] if len(data) >= 14 else 1  # Default to type A
 
+def encode_domain_name(domain_name):
+    parts = domain_name.split(".")
+    encoded = b"".join([bytes([len(part)]) + part.encode() for part in parts])
+    return encoded + b"\x00"
+
 class AuthoritativeServer:
     DNS_RECORDS = {
         # Example Domain Records
@@ -58,7 +63,7 @@ class AuthoritativeServer:
             "MX": "mail.example.com",
             "NS": "ns1.example.com",
         },
-        "ns1.example.com": {"A": "192.0.2.1"},  # Glue record
+        "ns1.example.com": {"A": "192.0.2.1"},  
         "mail.example.com": {"A": "93.184.216.35"},  # Mail server record
         "alias.example.com": {"A": "93.184.216.34"},  # Alias points to main server
 
@@ -153,15 +158,27 @@ class AuthoritativeServer:
 
         # Check DNS Records
         if domain_name in self.DNS_RECORDS:
+            if query_type == 15:  # MX Record
+                mx_record = self.DNS_RECORDS[domain_name].get("MX", None)
+                if mx_record:
+                    response = self.build_response(data, 0, [{"type": "MX", "value": mx_record, "ttl": 3600}])
+                    self.cache.set(domain_name, query_type, response, 3600)
+                    socket_conn.sendto(response, addr)
+                    logging.info(f"[RESPONSE SENT] MX Record for {domain_name}")
+                    return
+
             answer = self.DNS_RECORDS[domain_name].get("A", None)
             if answer:
                 response = self.build_response(data, 0, [{"type": "A", "value": answer, "ttl": 3600}])
                 self.cache.set(domain_name, query_type, response, 3600)
                 socket_conn.sendto(response, addr)
                 logging.info(f"[RESPONSE SENT] Domain: {domain_name}, Type: {query_type}")
-        else:
-            response = self.build_response(data, 3)  # NXDOMAIN
-            socket_conn.sendto(response, addr)
+                return
+
+        # Unsupported query type or domain not found
+        logging.warning(f"[NXDOMAIN] Domain: {domain_name} not found in records")
+        response = self.build_response(data, 3)  # NXDOMAIN
+        socket_conn.sendto(response, addr)
 
     def build_response(self, query, rcode, answers=None):
         transaction_id = query[:2]
@@ -184,8 +201,15 @@ class AuthoritativeServer:
         name = b'\xc0\x0c'
         ttl = struct.pack("!I", answer["ttl"])
         record_class = struct.pack("!H", 1)
-        record_type = struct.pack("!H", 1)  # A record
-        value = socket.inet_aton(answer["value"])
+        if answer["type"] == "A":
+            record_type = struct.pack("!H", 1)  # A record
+            value = socket.inet_aton(answer["value"])
+        elif answer["type"] == "MX":
+            record_type = struct.pack("!H", 15)  # MX record
+            preference = struct.pack("!H", 10)  # Priority value
+            value = preference + encode_domain_name(answer["value"])
+        else:
+            raise ValueError(f"Unsupported record type: {answer['type']}")
         record_length = struct.pack("!H", len(value))
         return name + record_type + record_class + ttl + record_length + value
 
