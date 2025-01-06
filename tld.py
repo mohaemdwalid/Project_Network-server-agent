@@ -144,11 +144,21 @@ class TLDServer:
                 server_socket.sendto(response, client_addr)
             except socket.timeout:
                 logging.error(f"[AUTHORITATIVE TIMEOUT] No response from Authoritative Server")
-                self.send_response(query, 2, client_addr, server_socket)  # SERVFAIL
+                self.send_response(query, 2, client_addr, server_socket)  # SERVFAIL (rcode=2)
+
 
     def send_response(self, query, rcode, client_addr, server_socket):
-        response = query[:2] + struct.pack("!H", 0x8180 | rcode) + query[4:]
+        transaction_id = query[:2]
+        flags = struct.pack("!H", 0x8180 | rcode)  # Response with rcode
+        questions = struct.pack("!H", 1)          # Number of questions
+        answer_rrs = struct.pack("!H", 0)         # No answers
+        authority_rrs = struct.pack("!H", 0)      # No authority
+        additional_rrs = struct.pack("!H", 0)     # No additional
+        question = query[12:]                     # Original question
+        response = transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs + question
         server_socket.sendto(response, client_addr)
+        logging.info(f"[SERVFAIL SENT] Query: {extract_domain_name(query)}, RCODE: {rcode}")
+
 
     def start(self):
         Thread(target=self.handle_udp).start()
