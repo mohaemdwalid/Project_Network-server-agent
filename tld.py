@@ -74,8 +74,9 @@ class TLDServer:
         "cs.umass.edu": {"host": "192.168.1.3", "port": 8055},
 
         # YouTube with CNAME Example
-        "www.youtube.co": {"host": "192.168.1.3", "port": 8055},
+        "www.youtube.com": {"host": "192.168.1.3", "port": 8055},
         "youtube-ui.l.google.com": {"host": "192.168.1.3", "port": 8055},
+            
     }
 
 

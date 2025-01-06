@@ -66,6 +66,7 @@ class RootServer:
         "io": {"host": "192.168.1.3", "port": 8054},
         "gov": {"host": "192.168.1.3", "port": 8054},
     }
+    
     def build_error_response(self, query, rcode):
         transaction_id = query[:2]
         flags = struct.pack("!H", 0x8180 | rcode)  # Set the error code in the response
